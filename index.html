@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" href="./css/chat.css">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+</head>
+<body>
+ !-- 🔐 ログイン画面 -->
+<div class="login-overlay" id="loginScreen">
+    <div class="login-card glass">
+        <div class="login-content">
+            <h2 class="login-title">🌸 FlowerS</h2>
+            <p class="login-subtitle">プレミアムチャット体験へようこそ</p>
+
+            <div id="mainLogin">
+                <button class="btn btn-primary login-btn" id="googleLogin">
+                    <span>📧 Googleで続ける</span>
+                </button>
+                <button class="btn btn-secondary login-btn" id="showEmailForm">
+                    <span>✉️ メールで続ける</span>
+                </button>
+                <button class="btn btn-glass login-btn" id="guestLogin">
+                    <span>👤 ゲストで体験</span>
+                </button>
+            </div>
+
+            <div class="login-form" id="emailForm">
+                <input type="email" class="input login-input" id="email" placeholder="メールアドレス">
+                <input type="password" class="input login-input" id="password" placeholder="パスワード（6文字以上）">
+                <button class="btn btn-success login-btn" id="emailLogin">ログイン</button>
+                <button class="btn btn-success login-btn" id="emailSignup">新規アカウント作成</button>
+                <button class="btn btn-glass login-btn" id="backToMain">戻る</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 💬 チャット画面 -->
+<div class="chat-container">
+    <div class="chat-card glass">
+        <!-- ヘッダー -->
+        <div class="header">
+            <div class="header-controls">
+                <div class="user-badge" id="userInfo" style="display: none;">👤 ゲスト</div>
+                <div class="status-indicator status-connecting" id="status">接続中</div>
+            </div>
+            <button class="logout-btn" id="logoutBtn" style="display: none;">ログアウト</button>
+            <h1>🌸 FlowerS</h1>
+            <p>次世代チャット体験</p>
+        </div>
+
+        <!-- メッセージ -->
+        <div class="messages-container" id="messages">
+            <div class="message message-system">
+                <div class="message-bubble">
+                    <div>FlowerS プレミアムへようこそ！🌺✨</div>
+                    <div class="message-time">🤖 システム</div>
+                </div>
+            </div>
+            <div class="typing-indicator" id="typingIndicator">誰かが入力中... ✍️</div>
+            <div class="message-count" id="messageCount">メッセージ: 1</div>
+        </div>
+
+        <!-- 入力エリア -->
+        <div class="input-container">
+            <div class="input-row">
+                <input type="text" class="input input-name" id="name" placeholder="なまえ" value="ゲスト">
+                <input type="text" class="input input-message" id="text" placeholder="メッセージを入力...">
+                <button class="send-button" id="send">送信</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    // 🌸 FlowerS プレミアムチャット
+    let allMessages = [], currentUser = null, isOnline = false, db = null, messageCount = 0;
+
+    const firebaseConfig = {
+        apiKey: "",
+        authDomain: "flowers-messages.firebaseapp.com",
+        projectId: "flowers-messages",
+        storageBucket: "flowers-messages.firebasestorage.app",
+        messagingSenderId: "654187005633",
+        appId: "1:654187005633:web:99cb3e0f5f6a4a7a2c7640"
+    };
+
+    // 🔔 通知システム
+    function showNotification(message, type = 'info') {
+        const notification = $(`<div class="notification notification-${type}">${message}</div>`);
+        $('body').append(notification);
+        setTimeout(() => {
+            notification.css('animation', 'notificationSlide 0.3s cubic-bezier(0.4, 0, 0.2, 1) reverse');
+            setTimeout(() => notification.remove(), 300);
+        }, 3000);
+    }
+
+    // 👤 ユーザー名取得
+    function getUserName() {
+        return currentUser ? (currentUser.displayName || currentUser.email || 'ログインユーザー') : ($("#name").val() || 'ゲスト');
+    }
+
+    // 📊 ステータス更新
+    function setStatus(type, text) {
+        $("#status").removeClass().addClass(`status-indicator status-${type}`).text(text);
+    }
+
+    // 📈 メッセージ数更新
+    function updateMessageCount() {
+        messageCount = allMessages.length + 1;
+        $("#messageCount").text(`メッセージ: ${messageCount}`);
+    }
+
+    // 🔥 Firebase初期化
+    async function initializeFirebase() {
+        if (!firebaseConfig.apiKey) {
+            setStatus('offline', 'オフライン');
+            return false;
+        }
+
+        try {
+            setStatus('connecting', '接続中');
+            const { initializeApp } = await import('https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js');
+            const { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, query, orderBy } = await import('https://www.gstatic.com/firebasejs/11.9.0/firebase-firestore.js');
+            const { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } = await import('https://www.gstatic.com/firebasejs/11.9.0/firebase-auth.js');
+
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            const auth = getAuth(app);
+
+            Object.assign(window, { auth, googleProvider: new GoogleAuthProvider(), signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, addDoc, collection, serverTimestamp });
+
+            onAuthStateChanged(auth, (user) => {
+                currentUser = user;
+                updateUserInfo();
+                user ? (showChatScreen(), showNotification(`${user.displayName || user.email}さん、ようこそ！`, 'success'), setupMessageListener()) : showLoginScreen();
+            });
+
+            const setupMessageListener = () => {
+                const messagesRef = collection(db, "flowers-messages");
+                onSnapshot(query(messagesRef, orderBy('time', 'asc')), (snapshot) => {
+                    allMessages = [];
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        allMessages.push({
+                            id: doc.id,
+                            name: data.name || 'ゲスト',
+                            text: data.text || '',
+                            time: data.time ? data.time.toDate() : new Date(),
+                            userId: data.userId || null,
+                            isOnline: true
+                        });
+                    });
+                    displayMessages();
+                    updateMessageCount();
+                });
+                isOnline = true;
+                setStatus('online', 'オンライン');
+            };
+
+            return true;
+        } catch (error) {
+            setStatus('offline', 'エラー');
+            return false;
+        }
+    }
+
+    // 🖥️ 画面切り替え
+    function showLoginScreen() {
+        $("#loginScreen").css('display', 'flex');
+    }
+
+    function showChatScreen() {
+        $("#loginScreen").fadeOut(300);
+    }
+
+    // 👤 ユーザー情報更新
+    function updateUserInfo() {
+        if (currentUser) {
+            const name = currentUser.displayName || currentUser.email || 'ログインユーザー';
+            $("#userInfo").text(`👤 ${name}`).show();
+            $("#logoutBtn").show();
+            $("#name").val(name).prop('disabled', true);
+        } else {
+            $("#userInfo").hide();
+            $("#logoutBtn").hide();
+            $("#name").val('ゲスト').prop('disabled', false);
+        }
+    }
+
+    // 🔐 認証機能
+    async function loginWithGoogle() {
+        if (!window.auth) return showNotification('Firebase認証が設定されていません', 'error');
+        try {
+            await window.signInWithPopup(window.auth, window.googleProvider);
+        } catch (error) {
+            const messages = {
+                'auth/popup-blocked': 'ポップアップがブロックされています',
+                'auth/popup-closed-by-user': 'ログインがキャンセルされました'
+            };
+            showNotification(messages[error.code] || 'Googleログインに失敗しました', 'error');
+        }
+    }
+
+    async function loginWithEmail() {
+        const email = $("#email").val().trim(), password = $("#password").val();
+        if (!email || !password) return showNotification('メールアドレスとパスワードを入力してください', 'warning');
+        if (!window.auth) return showNotification('Firebase認証が設定されていません', 'error');
+        try {
+            await window.signInWithEmailAndPassword(window.auth, email, password);
+            $("#email, #password").val('');
+        } catch (error) {
+            const messages = {
+                'auth/user-not-found': 'このメールアドレスは登録されていません',
+                'auth/wrong-password': 'パスワードが間違っています',
+                'auth/invalid-email': 'メールアドレスの形式が正しくありません'
+            };
+            showNotification(messages[error.code] || 'ログインに失敗しました', 'error');
+        }
+    }
+
+    async function signupWithEmail() {
+        const email = $("#email").val().trim(), password = $("#password").val();
+        if (!email || !password) return showNotification('メールアドレスとパスワードを入力してください', 'warning');
+        if (password.length < 6) return showNotification('パスワードは6文字以上で入力してください', 'warning');
+        if (!window.auth) return showNotification('Firebase認証が設定されていません', 'error');
+        try {
+            await window.createUserWithEmailAndPassword(window.auth, email, password);
+            showNotification('新規登録が完了しました！', 'success');
+            $("#email, #password").val('');
+        } catch (error) {
+            const messages = {
+                'auth/email-already-in-use': 'このメールアドレスは既に使用されています',
+                'auth/weak-password': 'パスワードが弱すぎます',
+                'auth/invalid-email': 'メールアドレスの形式が正しくありません'
+            };
+            showNotification(messages[error.code] || '新規登録に失敗しました', 'error');
+        }
+    }
+
+    async function logout() {
+        if (!window.auth) return showNotification('Firebase認証が設定されていません', 'error');
+        try {
+            await window.signOut(window.auth);
+            allMessages = [];
+            displayMessages();
+            showNotification('ログアウトしました', 'info');
+        } catch (error) {
+            showNotification('ログアウトに失敗しました', 'error');
+        }
+    }
+
+    // 💬 メッセージ表示
+    function displayMessages() {
+        const $messages = $("#messages");
+        const systemMsg = $messages.find('.message-system').first();
+        const typingIndicator = $("#typingIndicator");
+        const messageCountEl = $("#messageCount");
+
+        $messages.empty();
+        $messages.append(systemMsg);
+
+        allMessages.forEach(msg => {
+            const isMe = (currentUser && msg.userId === currentUser.uid) || (!currentUser && msg.name === getUserName());
+            const time = msg.time.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+            const messageClass = isMe ? 'message-me' : 'message-other';
+            const icon = isMe ? '👤' : '👻';
+            const indicator = msg.isOnline ? '🌐' : '📱';
+
+            $messages.append(`
+                <div class="message ${messageClass}">
+                    <div class="message-bubble">
+                        <div>${msg.text}</div>
+                        <div class="message-time">
+                            <span>${icon}</span>
+                            <span>${msg.name}</span>
+                            <span>•</span>
+                            <span>${time}</span>
+                            <span>${indicator}</span>
+                        </div>
+                    </div>
+                </div>
+            `);
+        });
+
+        $messages.append(typingIndicator);
+        $messages.append(messageCountEl);
+        $messages.scrollTop($messages[0].scrollHeight);
+    }
+
+    // 📝 メッセージ送信
+    async function sendMessage() {
+        const text = $("#text").val().trim(), name = getUserName();
+        if (!text) return showNotification('メッセージを入力してください', 'warning');
+        if (text.length > 500) return showNotification('メッセージが長すぎます（500文字以内）', 'error');
+
+        const userMsg = {
+            id: 'user_' + Date.now(),
+            name, text,
+            time: new Date(),
+            userId: currentUser?.uid || null,
+            isOffline: !isOnline
+        };
+
+        allMessages.push(userMsg);
+        displayMessages();
+        updateMessageCount();
+        $("#text").val('');
+
+        // 送信アニメーション
+        const $sendBtn = $("#send");
+        $sendBtn.css('transform', 'scale(0.95)');
+        setTimeout(() => $sendBtn.css('transform', ''), 100);
+
+        if (isOnline && window.addDoc) {
+            try {
+                await window.addDoc(window.collection(db, "flowers-messages"), {
+                    name: userMsg.name,
+                    text: userMsg.text,
+                    time: window.serverTimestamp(),
+                    userId: currentUser?.uid || null
+                });
+                showNotification('メッセージを送信しました！', 'success');
+            } catch (error) {
+                showNotification('メッセージの送信に失敗しました', 'error');
+            }
+        } else {
+            showNotification('オフラインメッセージを送信しました', 'info');
+        }
+    }
+
+    // 📱 デモメッセージ
+    function addDemoMessages() {
+        const demos = [
+            { name: 'さくら', text: 'プレミアムチャットすごく綺麗ですね！🌸', delay: 2000 },
+            { name: 'はな', text: 'グラスモーフィズムがとても美しい✨', delay: 4000 },
+            { name: 'みどり', text: 'アニメーションもスムーズで感動します🎭', delay: 6000 }
+        ];
+
+        demos.forEach((msg, i) => {
+            setTimeout(() => {
+                allMessages.push({
+                    id: 'demo_' + i,
+                    name: msg.name,
+                    text: msg.text,
+                    time: new Date(),
+                    userId: null,
+                    isOffline: true
+                });
+                displayMessages();
+                updateMessageCount();
+            }, msg.delay);
+        });
+    }
+
+    // ⌨️ タイピングインジケーター
+    let typingTimer;
+    function handleTyping() {
+        $("#typingIndicator").show();
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => $("#typingIndicator").hide(), 2000);
+    }
+
+    // 🎛️ イベント設定
+    function setupEvents() {
+        // メッセージ送信
+        $("#send").on("click", sendMessage);
+        $("#text").on("keypress", e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendMessage();
+            }
+        }).on("input", handleTyping);
+
+        // 認証
+        $("#googleLogin").on("click", loginWithGoogle);
+        $("#emailLogin").on("click", loginWithEmail);
+        $("#emailSignup").on("click", signupWithEmail);
+        $("#logoutBtn").on("click", logout);
+
+        // ログイン画面制御
+        $("#guestLogin").on("click", () => {
+            showChatScreen();
+            showNotification('プレミアム体験へようこそ！', 'success');
+            setTimeout(() => addDemoMessages(), 1000);
+        });
+
+        $("#showEmailForm").on("click", () => {
+            $("#mainLogin").fadeOut(200, () => $("#emailForm").fadeIn(200));
+        });
+
+        $("#backToMain").on("click", () => {
+            $("#emailForm").fadeOut(200, () => {
+                $("#mainLogin").fadeIn(200);
+                $("#email, #password").val('');
+            });
+        });
+
+        // キーボードショートカット
+        $(document).on('keydown', e => {
+            if (e.ctrlKey && e.key === 'Enter') sendMessage();
+            if (e.ctrlKey && e.shiftKey && e.key === 'L' && currentUser) {
+                e.preventDefault();
+                logout();
+            }
+        });
+
+        // フォーカス管理
+        $("#text").focus();
+
+        // 入力フィールドのエフェクト
+        $(".input").on('focus', function () {
+            $(this).parent().addClass('input-focused');
+        }).on('blur', function () {
+            $(this).parent().removeClass('input-focused');
+        });
+    }
+
+    // 🌐 ネットワーク監視
+    function setupNetworkMonitoring() {
+        window.addEventListener('online', () => {
+            showNotification('ネットワークに再接続しました', 'success');
+            if (firebaseConfig.apiKey) initializeFirebase();
+        });
+
+        window.addEventListener('offline', () => {
+            isOnline = false;
+            setStatus('offline', 'オフライン');
+            showNotification('オフラインモードです', 'warning');
+        });
+    }
+
+    // 🎨 動的エフェクト
+    function setupDynamicEffects() {
+        // パララックス効果
+        $(window).on('scroll', () => {
+            const scrolled = $(window).scrollTop();
+            $('.header').css('transform', `translateY(${scrolled * 0.5}px)`);
+        });
+
+        // マウス追跡エフェクト
+        $(document).on('mousemove', (e) => {
+            const x = (e.clientX / window.innerWidth) * 100;
+            const y = (e.clientY / window.innerHeight) * 100;
+
+            $('body').css('background-position', `${x}% ${y}%`);
+        });
+
+        // クリックリップル効果
+        $('.btn').on('click', function (e) {
+            const $this = $(this);
+            const offset = $this.offset();
+            const x = e.pageX - offset.left;
+            const y = e.pageY - offset.top;
+
+            const $ripple = $('<span class="ripple"></span>');
+            $ripple.css({
+                position: 'absolute',
+                left: x - 10,
+                top: y - 10,
+                width: 20,
+                height: 20,
+                background: 'rgba(255,255,255,0.6)',
+                borderRadius: '50%',
+                transform: 'scale(0)',
+                animation: 'rippleEffect 0.6s ease-out',
+                pointerEvents: 'none'
+            });
+
+            $this.append($ripple);
+            setTimeout(() => $ripple.remove(), 600);
+        });
+
+        // リップルアニメーション
+        $('<style>').text(`
+            @keyframes rippleEffect {
+                to {
+                    transform: scale(4);
+                    opacity: 0;
+                }
+            }
+        `).appendTo('head');
+    }
+
+    // 🚀 初期化
+    $(document).ready(async () => {
+        console.log('🌸 FlowerS プレミアム開始！');
+
+        setupEvents();
+        setupNetworkMonitoring();
+        setupDynamicEffects();
+
+        // スプラッシュ効果
+        $('body').css('opacity', '0').animate({ opacity: 1 }, 800);
+
+        const initialized = await initializeFirebase();
+        if (!initialized) {
+            showLoginScreen();
+            setTimeout(() => {
+                showNotification('Firebase設定を追加すると全機能が使えます', 'info');
+            }, 2000);
+        }
+
+        // ウェルカムメッセージ
+        setTimeout(() => {
+            showNotification('FlowerS プレミアムへようこそ！🌸✨', 'success');
+        }, 1000);
+    });
+        //よくある間違い
+
+          //  apiKeyが間違っている
+            //projectIdが間違っている
+            //Firestoreのコレクション名が違う
+            //Firebase SDKのバージョンが古い / 新しい
+    </script>
+    
+</body>
+</html>
